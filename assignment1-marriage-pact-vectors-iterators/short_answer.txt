@@ -1,0 +1,44 @@
+Assignment 1: Marriage Pact — short answers
+=============================================
+Q1. reserve vs resize — and the capacity you chose in get_applicants.
+    YOUR ANSWER:
+    reserve(n) pre-allocates capacity without changing size so elements aren't constructed.
+    resize(n) actually changes the size, default-constructing or truncating elements.
+    i used reserve(1000) as a rough estimate from eyeballing students.txt; this
+    avoids repeated reallocations as we push_back, without the overhead
+    of constructing 1000 empty strings upfront like resize would.
+
+Q2. What does it mean for a std::ranges algorithm to take a projection?
+    Give one example from your find_matches (or explain why a projection
+    didn't help).
+    YOUR ANSWER:
+    Projection is a callable applied to each element before the
+    algorithm's predicate sees. one common use case is to compare on a member
+    without transforming the range itself. in `find_matches` i
+    pass `initials` as a projection to `copy_if` (must wrap in lambda for template to be initialized).
+    without the projection i'd have to compute `initials` inside the
+    predicate and lose the clean separation of "what to extract" vs
+    "what to check"
+
+Q3. Iterator invalidation in run_mixer. Which strategy did you choose
+    (erase-returns-next-iterator / indices / restart) and why?
+    What specifically goes wrong with the naive approach?
+    YOUR ANSWER:
+    i used index-based traversal with i-- after erasing a pair. the
+    naive approach fails because erase() invalidates all iterators at
+    and after the erased position.
+    with indices, after erasing at j then i (higher index first!),
+    i-- corrects for the fact that a new element has shifted
+    into position i, so the outer loop's ++i would skip it.
+
+    also, it was quite hard to re-use the previous functions in this
+    routine effectively, due to erase issues and the fact that the range had
+    to NOT include the original person (i) to be paired.
+
+Q4. at() vs []. When, if ever, would you reach for vec.at(i) over
+    vec[i] in this assignment?
+    YOUR ANSWER:
+    at() does bounds checking and throws std::out_of_range; [] is UB
+    on out-of-bounds. in this assignment i wouldn't use at() in the
+    hot path since indices are always checked.
+    it COULD be used for `name[space+1]` but i covered the bound checking defensively.
