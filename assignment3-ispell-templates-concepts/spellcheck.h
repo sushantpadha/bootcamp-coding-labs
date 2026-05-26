@@ -9,7 +9,7 @@ struct Token {
   std::string content;
   size_t src_offset;
 
-  template <typename It>
+  template <std::input_iterator It>
   Token(std::string& source, It begin, It end)
       : src_offset{static_cast<std::size_t>(std::distance(source.begin(), begin))},
         content{std::string(begin, end)} {
