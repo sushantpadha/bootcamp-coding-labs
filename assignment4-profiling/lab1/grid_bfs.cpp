@@ -15,6 +15,7 @@ using namespace std;
 
 constexpr int kRows = 260;
 constexpr int kCols = 260;
+constexpr int kTotalCells = kRows * kCols;
 constexpr int kRequestCount = 1200;
 constexpr int kSmallRequestCount = 25;
 constexpr int kHeatmapThresholdCount = 256;
@@ -53,72 +54,61 @@ struct CongestionSummary {
     uint64_t pressure_checksum = 0;
 };
 
-/**
- * Convert a row and column pair into a one-dimensional array index.
- */
-__attribute__((noinline)) int to_index(int row, int col, int cols) {
-    return row * cols + col;
-}
+// ! flat grid avoids double indirection
+struct Grid {
+    const char *data;
+    int rows;
+    int cols;
+};
 
-/**
- * Return true if the coordinate is inside the grid bounds.
- */
-__attribute__((noinline)) bool in_bounds(int row, int col, int rows, int cols) {
-    return row >= 0 && row < rows && col >= 0 && col < cols;
-}
-
-/**
- * Return true if the coordinate refers to a traversable grid cell.
- */
-__attribute__((noinline)) bool is_open(const vector<string> &grid, int row, int col) {
-    return grid[row][col] != '#';
-}
-
-/**
- * Build a deterministic grid with open corridors and blocked cells.
- *
- * The pattern is generated in memory to keep the activity focused on CPU
- * profiling rather than file parsing or filesystem behavior.
- */
-vector<string> generate_grid(int rows, int cols) {
-    vector<string> grid(rows, string(cols, '.'));
+vector<char> generate_grid(int rows, int cols) {
+    vector<char> buf(rows * cols, '.');
     mt19937 rng(kSeed);
     uniform_int_distribution<int> percent(0, 99);
 
     for (int row = 0; row < rows; ++row) {
+        // ! row pointer hoist
+        char *grid_row = buf.data() + row * cols;
+
         for (int col = 0; col < cols; ++col) {
             bool border = row == 0 || col == 0 || row == rows - 1 || col == cols - 1;
             bool corridor = (row % 17 == 1) || (col % 19 == 1);
             bool blocked = percent(rng) < 26;
 
             if (border) {
-                grid[row][col] = '#';
+                grid_row[col] = '#';
             } else if (corridor) {
-                grid[row][col] = '.';
+                grid_row[col] = '.';
             } else {
-                grid[row][col] = blocked ? '#' : '.';
+                grid_row[col] = blocked ? '#' : '.';
             }
         }
     }
 
-    return grid;
+    return buf;
 }
 
-/**
- * Find the next open cell while walking through the grid in row-major order.
- */
-Point next_open_cell(const vector<string> &grid, int &cursor) {
-    int rows = static_cast<int>(grid.size());
-    int cols = static_cast<int>(grid[0].size());
-    int total = rows * cols;
+Point next_open_cell(Grid grid, int &cursor) {
+    const int total = grid.rows * grid.cols;
 
     for (int step = 0; step < total; ++step) {
-        int index = (cursor + step) % total;
-        int row = index / cols;
-        int col = index % cols;
+        int index = cursor + step;
 
-        if (is_open(grid, row, col)) {
-            cursor = (index + 1) % total;
+        // ! branchless wrap
+        if (index >= total) {
+            index -= total;
+        }
+
+        const int row = index / grid.cols;
+        const int col = index - row * grid.cols;
+
+        if (grid.data[index] != '#') {
+            cursor = index + 1;
+
+            if (cursor >= total) {
+                cursor -= total;
+            }
+
             return {row, col};
         }
     }
@@ -126,15 +116,13 @@ Point next_open_cell(const vector<string> &grid, int &cursor) {
     return {1, 1};
 }
 
-/**
- * Generate deterministic route requests over open cells in the grid.
- */
-vector<RouteRequest> generate_requests(const vector<string> &grid, int count) {
+
+vector<RouteRequest> generate_requests(Grid grid, int count) {
     vector<RouteRequest> requests;
     requests.reserve(count);
 
     int start_cursor = 0;
-    int goal_cursor = static_cast<int>(grid.size() * grid[0].size()) / 2;
+    int goal_cursor = (grid.rows * grid.cols) / 2;
 
     for (int i = 0; i < count; ++i) {
         Point start = next_open_cell(grid, start_cursor);
@@ -148,12 +136,6 @@ vector<RouteRequest> generate_requests(const vector<string> &grid, int count) {
     return requests;
 }
 
-/**
- * Build a short human-readable label for one route request.
- *
- * The label is folded into a checksum so that the work remains visible to
- * profilers and is not discarded as dead code.
- */
 string format_route_label(const RouteRequest &request, int request_index) {
     string label = "route:";
     label += to_string(request_index);
@@ -168,9 +150,6 @@ string format_route_label(const RouteRequest &request, int request_index) {
     return label;
 }
 
-/**
- * Fold a label string into a simple deterministic checksum.
- */
 uint64_t checksum_label(const string &label) {
     uint64_t checksum = 1469598103934665603ULL;
 
@@ -182,73 +161,81 @@ uint64_t checksum_label(const string &label) {
     return checksum;
 }
 
-/**
- * Compute the shortest path length between two points using BFS.
- *
- * The function returns -1 when the goal cannot be reached.
- */
-int shortest_path_bfs(const vector<string> &grid, const RouteRequest &request,
+int shortest_path_bfs(Grid grid,
+                      const RouteRequest &request,
                       vector<int> &heatmap) {
-    int rows = static_cast<int>(grid.size());
-    int cols = static_cast<int>(grid[0].size());
-    int total = rows * cols;
+    // ! static storage avoids heap allocs
+    static uint16_t distance[kTotalCells];
+    static int frontier[kTotalCells];
 
-    int *distance = new int[total];
-    std::fill(distance, distance + total, -1);
-    unsigned char *visited = new unsigned char[total]{};
-    vector<Point> frontier(static_cast<size_t>(total));
+    constexpr uint16_t kUnvisited = 0xFFFF;
+    constexpr uint16_t kBlocked   = 0xFFFE;
+
+    const int rows = grid.rows;
+    const int cols = grid.cols;
+    const int total = rows * cols;
+
+    // ! walls pre-marked in distance buffer
+    for (int i = 0; i < total; ++i) {
+        distance[i] =
+            (grid.data[i] == '#') ? kBlocked : kUnvisited;
+    }
+
     size_t frontier_head = 0;
     size_t frontier_tail = 0;
 
-    int start_index = request.start.row * cols + request.start.col;
-    int goal_index = request.goal.row * cols + request.goal.col;
+    const int start_index =
+        request.start.row * cols + request.start.col;
 
-    visited[start_index] = 1;
+    const int goal_index =
+        request.goal.row * cols + request.goal.col;
+
     distance[start_index] = 0;
     heatmap[start_index] += 1;
-    frontier[frontier_tail++] = request.start;
+    frontier[frontier_tail++] = start_index;
 
     const int drow[4] = {-1, 1, 0, 0};
     const int dcol[4] = {0, 0, -1, 1};
 
     while (frontier_head < frontier_tail) {
-        Point current = frontier[frontier_head++];
+        const int current = frontier[frontier_head++];
 
-        int current_index = current.row * cols + current.col;
-        if (current_index == goal_index) {
-            return distance[current_index];
+        if (current == goal_index) {
+            return distance[current];
         }
 
+        const uint16_t current_dist = distance[current];
+
+        const int row = current / cols;
+        const int col = current - row * cols;
+
         for (int direction = 0; direction < 4; ++direction) {
-            int next_row = current.row + drow[direction];
-            int next_col = current.col + dcol[direction];
+            const int next_row = row + drow[direction];
+            const int next_col = col + dcol[direction];
 
-            if (next_row < 0 || next_row >= rows || next_col < 0 || next_col >= cols) {
-                continue;
-            }
-            if (grid[next_row][next_col] == '#') {
-                continue;
-            }
-
-            int next_index = next_row * cols + next_col;
-            if (visited[next_index]) {
+            // ! single unsigned bounds check
+            if ((unsigned)next_row >= (unsigned)rows ||
+                (unsigned)next_col >= (unsigned)cols) {
                 continue;
             }
 
-            visited[next_index] = 1;
-            distance[next_index] = distance[current_index] + 1;
+            const int next_index =
+                next_row * cols + next_col;
+
+            if (distance[next_index] != kUnvisited) {
+                continue;
+            }
+
+            distance[next_index] = current_dist + 1;
             heatmap[next_index] += 1;
-            frontier[frontier_tail++] = {next_row, next_col};
+            frontier[frontier_tail++] = next_index;
         }
     }
 
     return -1;
 }
 
-/**
- * Run all route requests and aggregate a compact summary.
- */
-RunSummary run_all_requests(const vector<string> &grid,
+RunSummary run_all_requests(Grid grid,
                             const vector<RouteRequest> &requests,
                             vector<int> &heatmap) {
     RunSummary summary;
@@ -272,12 +259,6 @@ RunSummary run_all_requests(const vector<string> &grid,
     return summary;
 }
 
-/**
- * Summarize how often the BFS workload touched each cell.
- *
- * The function computes basic totals and a cumulative visit-distribution
- * checksum that the final report can print.
- */
 HeatmapSummary summarize_heatmap(const vector<int> &heatmap, int rows, int cols) {
     HeatmapSummary summary;
     array<int, kRequestCount + 1> visit_counts{};
@@ -315,101 +296,112 @@ HeatmapSummary summarize_heatmap(const vector<int> &heatmap, int rows, int cols)
     return summary;
 }
 
-/**
- * Compute one cell's next congestion-pressure value.
- *
- * The formula mixes the current cell, its four neighbors, the original heatmap
- * source value, and a small deterministic pulse so each pass keeps doing real
- * work instead of collapsing into a trivial copy.
- */
-int next_pressure_value(int center, int north, int south, int west, int east,
-                        int source, int row, int col, int pass) {
-    int pulse = (row * 17 + col * 31 + pass * 13) & 15;
-    int pressure = (center * 2 + north + south + west + east + source + pulse) / 8;
+inline int next_pressure_value(int center, int north, int south,
+                               int west, int east,
+                               int source, int row,
+                               int col, int pass) {
+    const int pulse = (row - col - pass * 3 + 16) & 15;
 
-    if (((center + row + pass) & 7) == 0) {
-        pressure = pressure / 2 + source;
-    } else {
-        pressure += center & 3;
-    }
+    // ! shift instead of divide
+    const int blended = ((center << 1) + north + south + west + east + source + pulse) >> 3;
 
-    return min(pressure, 8191);
+    // ! arithmetic branch select
+    const int cond = (((center + row + pass) & 7) == 0);
+
+    const int branch_a = (blended >> 1) + source;
+
+    const int branch_b = blended + (center & 3);
+
+    const int pressure = cond * branch_a + (1 - cond) * branch_b;
+
+    return pressure > 8191 ? 8191 : pressure;
 }
 
-/**
- * Evolve the raw visit heatmap into a congestion-pressure map.
- *
- * Each pass depends on the previous pass, so the outer loop represents real
- * iterative work. The inner loops intentionally walk a row-major array in
- * column-major order to create a cache-locality problem for students to find.
- */
 CongestionSummary compute_congestion_pressure(const vector<int> &heatmap,
                                               int rows, int cols,
                                               int congestion_passes) {
-    vector<int> current = heatmap;
-    vector<int> next = heatmap;
-    vector<int> source(heatmap.size());
+    // ! aligned static buffers
+    alignas(64) static int buf_a[kTotalCells];
+    alignas(64) static int buf_b[kTotalCells];
+    alignas(64) static int source[kTotalCells];
 
-    for (size_t i = 0; i < heatmap.size(); ++i) {
+    memcpy(buf_a, heatmap.data(), kTotalCells * sizeof(int));
+    memcpy(buf_b, heatmap.data(), kTotalCells * sizeof(int));
+
+    // ! source precompute
+    for (int i = 0; i < kTotalCells; ++i) {
         source[i] = heatmap[i] / 8;
     }
 
+    int *__restrict__ curr = buf_a;
+    int *__restrict__ nxt  = buf_b;
+    const int *__restrict__ src = source;
+
     for (int pass = 0; pass < congestion_passes; ++pass) {
-        for (int col = 1; col < cols - 1; ++col) {
-            for (int row = 1; row < rows - 1; ++row) {
-                int index = row * cols + col;
+        for (int row = 1; row < rows - 1; ++row) {
+            int index = row * cols + 1;
+            const int row_end = index + (cols - 2);
 
-                int center = current[index];
-                int north = current[index - cols];
-                int south = current[index + cols];
-                int west = current[index - 1];
-                int east = current[index + 1];
+            // ! pointer walk removes index arithmetic
+            const int *p_center = curr + index;
+            const int *p_north  = curr + index - cols;
+            const int *p_south  = curr + index + cols;
+            const int *p_west   = curr + index - 1;
+            const int *p_east   = curr + index + 1;
+            const int *p_src    = src  + index;
+                  int *p_nxt    = nxt  + index;
 
-                next[index] = next_pressure_value(center, north, south, west, east,
-                                                  source[index], row, col, pass);
+            for (; index < row_end; ++index,
+                    ++p_center, ++p_north, ++p_south,
+                    ++p_west, ++p_east, ++p_src, ++p_nxt) {
+                *p_nxt = next_pressure_value(
+                    *p_center, *p_north, *p_south,
+                    *p_west, *p_east, *p_src,
+                    row, index - row * cols, pass);
             }
         }
 
-        current.swap(next);
+        int *tmp = curr;
+        curr = nxt;
+        nxt = tmp;
     }
 
     CongestionSummary summary;
-    for (int value : current) {
+
+    for (int i = 0; i < kTotalCells; ++i) {
+        const int value = curr[i];
+
         summary.total_pressure += value;
+
         if (value > summary.max_pressure) {
             summary.max_pressure = value;
         }
+
         summary.pressure_checksum =
-            summary.pressure_checksum * 16777619ULL + static_cast<uint64_t>(value + 97);
+            summary.pressure_checksum * 16777619ULL +
+            static_cast<uint64_t>(value + 97);
     }
 
     return summary;
 }
 
-/**
- * Count open cells in the grid.
- */
-int count_open_cells(const vector<string> &grid) {
+int count_open_cells(Grid grid) {
+    const int total = grid.rows * grid.cols;
     int open_cells = 0;
 
-    for (const string &row : grid) {
-        open_cells += static_cast<int>(count(row.begin(), row.end(), '.'));
+    for (int i = 0; i < total; ++i) {
+        open_cells += (grid.data[i] != '#');
     }
 
     return open_cells;
 }
 
-/**
- * Print the final summary in a stable, human-readable format.
- */
-void print_summary(const vector<string> &grid,
+void print_summary(Grid grid,
                    const RunSummary &summary,
                    const HeatmapSummary &heatmap_summary,
                    const CongestionSummary &congestion_summary,
                    int congestion_passes,
                    double seconds) {
-    int rows = static_cast<int>(grid.size());
-    int cols = static_cast<int>(grid[0].size());
     int open_cells = count_open_cells(grid);
 
     double average_distance = 0.0;
@@ -417,7 +409,7 @@ void print_summary(const vector<string> &grid,
         average_distance = static_cast<double>(summary.total_distance) / summary.reachable;
     }
 
-    cout << "grid = " << rows << " x " << cols << '\n';
+    cout << "grid = " << grid.rows << " x " << grid.cols << '\n';
     cout << "open_cells = " << open_cells << '\n';
     cout << "requests = " << summary.requests << '\n';
     cout << "reachable = " << summary.reachable << '\n';
@@ -439,25 +431,28 @@ void print_summary(const vector<string> &grid,
  * Run a tiny deterministic correctness check for BFS.
  */
 bool run_sanity_check() {
-    vector<string> grid = {
-        ".....",
-        ".###.",
-        "...#.",
-        ".#...",
-        ".....",
-    };
-    vector<int> heatmap(static_cast<int>(grid.size() * grid[0].size()), 0);
+    // Flat char buffer for the 5x5 test grid
+    const char raw[] =
+        "....."
+        ".###."
+        "...#."
+        ".#..."
+        ".....";
+    Grid grid{raw, 5, 5};
+    vector<int> heatmap(5 * 5, 0);
+
+    // build_open_bits(grid);  // ! must initialise bitset for sanity-check grid
+
+    // bool bfs_visited[5 * 5]{};
+    // int  bfs_distance[5 * 5]{};
 
     RouteRequest reachable{{0, 0}, {4, 4}};
     RouteRequest unreachable{{0, 0}, {1, 1}};
 
-    return shortest_path_bfs(grid, reachable, heatmap) == 8 &&
+    return shortest_path_bfs(grid, reachable,   heatmap) == 8 &&
            shortest_path_bfs(grid, unreachable, heatmap) == -1;
 }
 
-/**
- * Entry point for the sanity check, small workload, or full workload.
- */
 int main(int argc, char **argv) {
     if (argc == 2 && string(argv[1]) == "--test") {
         if (!run_sanity_check()) {
@@ -475,13 +470,15 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    int request_count = small_workload ? kSmallRequestCount : kRequestCount;
-    int congestion_passes =
-        small_workload ? kSmallCongestionPasses : kCongestionPasses;
+    int request_count    = small_workload ? kSmallRequestCount  : kRequestCount;
+    int congestion_passes = small_workload ? kSmallCongestionPasses : kCongestionPasses;
 
     auto start = chrono::steady_clock::now();
 
-    vector<string> grid = generate_grid(kRows, kCols);
+    vector<char> grid_buf = generate_grid(kRows, kCols);
+    Grid grid{grid_buf.data(), kRows, kCols};
+    // build_open_bits(grid);   // ! build bitset right after grid is ready
+
     vector<RouteRequest> requests = generate_requests(grid, request_count);
     vector<int> heatmap(kRows * kCols, 0);
     RunSummary summary = run_all_requests(grid, requests, heatmap);
