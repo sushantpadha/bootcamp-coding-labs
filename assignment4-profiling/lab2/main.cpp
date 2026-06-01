@@ -171,20 +171,12 @@ __attribute__((always_inline)) inline static int chase_dependency(
     return sum7[start & (sum7.size() - 1)];
 }
 
-static int cold_column_probe(const std::vector<int>& history, int rows, int cols, int seed) {
+static int cold_column_probe(const std::vector<int>& history, int rows, int cols, int /*seed*/) {
     int sum = 0;
-    const int start_col = seed % cols;
-
-    for (int row = 0; row < rows; ++row) {
-        const int base = row * cols;
-        for (int col = start_col; col < cols; ++col) {
-            sum += history[base + col] & 31;
-        }
-        for (int col = 0; col < start_col; ++col) {
-            sum += history[base + col] & 31;
-        }
+    // ! every element is visited anyway - this can be vectorized netter
+    for (int i = 0; i < rows * cols; ++i) {
+        sum += history[i] & 31;
     }
-
     return sum;
 }
 
@@ -199,11 +191,10 @@ static long long process_packets(
         const Packet& p = packets[i];
         int score = branchy_score(p, lane_weight);
 
-        if ((score ^ p.quality) & 7) {
-            score += chase_dependency(score + p.device_id, STEPS, sum7);
-        } else {
-            score += lane_weight[p.lane];
-        }
+        // ! mostly true
+        const int mask = -(((score ^ p.quality) & 7) != 0);
+        score += (mask & chase_dependency(score + p.device_id, STEPS, sum7)) 
+                | ((~mask) & lane_weight[p.lane]);
 
         total += score;
     }
@@ -239,7 +230,7 @@ int main() {
     const int lane_count = 32;
     const int packet_count = 220000;
     const int dependency_count = 1 << 18;
-    constexpr int history_cols = 128;   // 2048 too
+    constexpr int history_cols = 2048;   // 2048 too
     const int epochs = 6;
 
     std::vector<Packet> packets = build_packets(packet_count, device_count, lane_count);

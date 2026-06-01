@@ -366,6 +366,7 @@ This suggests:
 
 ## Phase 2
 ### Changes (2048)
+- Remove (dumb) unnatural loop in `cold_column_probe` with more vectorizable version
 - Specialize the functions based on `history_cols` values by templating
     - This can make loop unrolling, modulos etc. easier for the compiler
 - `p.stamp % history_cols` -> `i & (history_cols - 1)` under the assumption history_cols is 2^k
@@ -373,6 +374,7 @@ This suggests:
     - I also explored writing a massive switch statment (64 cases) - did not help
 - Precomputed 7-step jump sum since its in hot loop
     - Led to major gain
+- Make the condition in `process_packets` branchless
 - Compiler hints - `__restrict__`, `always_inline`, using pointers (rarely though)
 - Compiler flags!
     - `-O3 -march=native -funroll-loops` to optimize and really force the compiler to unroll loops*
