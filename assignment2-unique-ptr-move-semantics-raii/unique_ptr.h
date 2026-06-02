@@ -13,6 +13,7 @@ namespace cs106l {
 template <typename T> class unique_ptr {
 private:
   /* STUDENT TODO: What data must a unique_ptr keep track of? */
+    T* data_;
 
 public:
   /**
@@ -20,17 +21,17 @@ public:
    * @param ptr The pointer to manage.
    * @note You should avoid using this constructor directly and instead use `make_unique()`.
    */
-  unique_ptr(T* ptr) {
+  unique_ptr(T* ptr)
+    : data_(ptr) {
     /* STUDENT TODO: Implement the constructor */
-    throw std::runtime_error("Not implemented: unique_ptr(T* ptr)");
   }
 
   /**
    * @brief Constructs a new `unique_ptr` from `nullptr`.
    */
-  unique_ptr(std::nullptr_t) {
+  unique_ptr(std::nullptr_t)
+    : data_(nullptr) {
     /* STUDENT TODO: Implement the nullptr constructor */
-    throw std::runtime_error("Not implemented: unique_ptr(std::nullptr_t)");
   }
 
   /**
@@ -45,7 +46,8 @@ public:
    */
   T& operator*() {
     /* STUDENT TODO: Implement the dereference operator */
-    throw std::runtime_error("Not implemented: operator*()");
+    if (!data_) throw std::runtime_error("dereferencing null pointer");
+    return *(data_);
   }
 
   /**
@@ -54,7 +56,8 @@ public:
    */
   const T& operator*() const {
     /* STUDENT TODO: Implement the dereference operator (const) */
-    throw std::runtime_error("Not implemented: operator*() const");
+    if (!data_) throw std::runtime_error("dereferencing null pointer");
+    return *(data_);
   }
 
   /**
@@ -64,7 +67,8 @@ public:
    */
   T* operator->() {
     /* STUDENT TODO: Implement the arrow operator */
-    throw std::runtime_error("Not implemented: operator->()");
+    // if (!data_) throw std::runtime_error("dereferencing null pointer");
+    return (data_);
   }
 
   /**
@@ -74,7 +78,8 @@ public:
    */
   const T* operator->() const {
     /* STUDENT TODO: Implement the arrow operator */
-    throw std::runtime_error("Not implemented: operator->() const");
+    // if (!data_) throw std::runtime_error("dereferencing null pointer");
+    return (data_);
   }
 
   /**
@@ -86,7 +91,7 @@ public:
    */
   explicit operator bool() const {
     /* STUDENT TODO: Implement the boolean conversion operator */
-    throw std::runtime_error("Not implemented: operator bool() const");
+    return (data_ != nullptr);
   }
 
   /** STUDENT TODO: In the space below, do the following:
@@ -96,6 +101,31 @@ public:
    * - Implement the move constructor
    * - Implement the move assignment operator
    */
+
+   ~unique_ptr() {
+    delete data_;
+   }
+
+   unique_ptr(const unique_ptr<T>&) = delete;
+   unique_ptr& operator=(const unique_ptr<T>&) = delete;
+
+   unique_ptr(unique_ptr<T>&& o)
+    : data_(o.data_) {
+        if (o.data_) {
+            o.data_ = nullptr;
+        }
+   }
+
+   unique_ptr& operator=(unique_ptr<T>&& o) noexcept {
+    delete data_;
+
+    data_ = o.data_;
+    if (o.data_) {
+        o.data_ = nullptr;
+    }
+
+    return *this;
+   }
 
   /* STUDENT TODO (Part 3): Implement equality comparisons.
    *
@@ -115,6 +145,9 @@ public:
    * Hint: declare them as `friend` inside this class so they can
    * see the private pointer, and define them inline here.
    */
+  friend bool operator==(const unique_ptr& p1, const unique_ptr& p2) {
+    return p1.data_ == p2.data_;
+  }
 };
 
 /**
