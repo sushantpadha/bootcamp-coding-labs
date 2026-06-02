@@ -5,6 +5,7 @@ CXXFLAGS_DEBUG := $(CXXFLAGS_BASE) -O0 -g
 CXXFLAGS_PERF := $(CXXFLAGS_BASE) -O2 -g -fno-omit-frame-pointer
 CXXFLAGS_GPROF := $(CXXFLAGS_BASE) -O0 -g -pg
 CXXFLAGS_OPTIMIZED := $(CXXFLAGS_BASE) -O3 -g
+CXXFLAGS_BEST := $(CXXFLAGS_BASE) -Ofast -march=native -flto -fno-exceptions -fno-rtti -fomit-frame-pointer -funroll-loops -DNDEBUG -fopt-info-vec
 
 TARGET := grid_bfs
 SOURCE := grid_bfs.cpp
@@ -26,6 +27,9 @@ gprof: $(SOURCE)
 optimized: $(SOURCE)
 	$(CXX) $(CXXFLAGS_OPTIMIZED) $< -o $(TARGET)
 
+best: $(SOURCE)
+	$(CXX) $(CXXFLAGS_BEST) $< -o $(TARGET)
+
 test: all
 	./$(TARGET) --test
 
@@ -43,6 +47,7 @@ clean:
 
 help:
 	@echo "Targets:"
+	@echo "  best       - build for best speed"
 	@echo "  all        - build with -O2 -g"
 	@echo "  debug      - build with -O0 -g"
 	@echo "  perf       - build with frame pointers for perf call stacks"
