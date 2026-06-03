@@ -5,9 +5,7 @@
  */
 User::User(const std::string& name)
   : _name(name)
-  , _friends(nullptr)
-  , _size(0)
-  , _capacity(0)
+  , _friends()
 {
 }
 
@@ -18,17 +16,7 @@ User::User(const std::string& name)
 void
 User::add_friend(const std::string& name)
 {
-  if (_size == _capacity) {
-    _capacity = 2 * _capacity + 1;
-    std::string* newFriends = new std::string[_capacity];
-    for (size_t i = 0; i < _size; ++i) {
-      newFriends[i] = _friends[i];
-    }
-    delete[] _friends;
-    _friends = newFriends;
-  }
-
-  _friends[_size++] = name;
+  _friends.add(name);
 }
 
 /**
@@ -43,10 +31,9 @@ User::get_name() const
 /**
  * Returns the number of friends this User has.
  */
-size_t
-User::size() const
+size_t User::size() const
 {
-  return _size;
+  return _friends.size();
 }
 
 /**
@@ -63,3 +50,47 @@ void User::set_friend(size_t index, const std::string& name)
  * STUDENT TODO:
  * The definitions for your custom operators and special member functions will go here!
  */
+std::ostream& operator<<(std::ostream& out, User const& user) {
+    out << "User(name=" << user._name << ", friends=[";
+    out << user._friends;
+    return (out << "])");
+}
+
+// void swap(User& lhs, User& rhs) noexcept {
+//     using std::swap;
+//     swap(lhs._name, rhs._name);
+//     swap(lhs._friends, rhs._friends);
+//     swap(lhs._size, rhs._size);
+//     swap(lhs._capacity, rhs._capacity);
+// }
+
+// // must be defined
+// User::User(const User& user) {
+//     _name = user._name;
+//     _size = user._size;
+//     _capacity = user._capacity;
+//     _friends = new std::string[_capacity];
+//     for(size_t i = 0; i < _size; i++) {
+//         _friends[i] = user._friends[i];
+//     }
+// }
+
+// User& User::operator=(User user) {
+//     swap(*this, user);
+//     return *this;
+// }
+
+// User::~User() {
+//     delete[] _friends;
+// }
+
+bool User::operator<(const User& other) const {
+    return _name < other._name;
+}
+
+// symmetricl
+User& User::operator+=(User& other) {
+    add_friend(other._name);
+    other.add_friend(_name);
+    return *this;
+}

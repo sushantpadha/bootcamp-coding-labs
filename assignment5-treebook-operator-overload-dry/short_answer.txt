@@ -1,7 +1,7 @@
-Assignment 4: TreeBook — short answers
+Assignment 4: TreeBook - short answers
 ========================================
 
-Q1 (DRY — Part 3).
+Q1 (DRY - Part 3).
     Quote the exact lines or expressions that were duplicated between your
     Part 2 copy constructor and copy assignment. Which of the two refactors
     did you choose (helper method, or copy-and-swap), and how does it
@@ -9,19 +9,52 @@ Q1 (DRY — Part 3).
     why it is exception-safe.
 
     YOUR ANSWER:
+    The duplicated lines between the Part 2 copy constructor and copy assignment were:
+
+        _name = user._name;
+        _size = user._size;
+        _capacity = user._capacity;
+        _friends = new std::string[_capacity];
+        for(size_t i = 0; i < _size; i++) _friends[i] = user._friends[i];
+
+I chose copy-and-swap. A `swap` helper exchanges the four members of two `User` objects.
+The copy assignment takes its parameter by value, invoking the copy constructor to produce
+a fresh copy, then swaps `*this` with that copy and returns `*this`. The old data is cleaned
+up automatically when the temporary goes out of scope. This eliminates duplication because
+the allocate-and-copy logic lives only in the copy constructor.
+
+It is exception-safe because if the copy constructor throws, `*this` is never touched -
+the swap only happens after a successful copy, and the temporary's destructor runs normally
+regardless, releasing any partially-constructed state.
 
 
-Q2 (SRP — Part 4).
+Q2 (SRP - Part 4).
     List every responsibility the `User` class had at the end of Part 3.
     Mark which of them belonged to `FriendList`. How did extracting
-    `FriendList` change `User`'s special member functions — which became
+    `FriendList` change `User`'s special member functions - which became
     `= default;`, which disappeared entirely, and which (if any) did you
     keep hand-written and why?
 
     YOUR ANSWER:
+At the end of Part 3, User was responsible for:
+  - knowing the user's _name                          [User]
+  - representing a person on the social network       [User]
+  - owning the _friends pointer, _size, _capacity     [FriendList]
+  - growing the array when capacity runs out          [FriendList]
+  - deep-copying the array in copy ctor/assignment    [FriendList]
+  - releasing the array in the destructor             [FriendList]
+  - printing itself via operator<<                    [User, delegates to FriendList]
+  - operator< and operator+=                          [User]
+
+After extraction, User's destructor, copy constructor, copy assignment, and `swap` helper
+all disappeared - the compiler generates correct versions by delegating to `FriendList`'s
+and `std::string`'s SMFs, so no hand-written code was needed. The `= delete` on move ctor/=
+was kept because `FriendList`'s move was explicitly deleted, and without also deleting on
+User, the implicitly-deleted move would be ignored by overload resolution, making
+`move_constructible<User>` spuriously true and failing the test (elaborated in Q3).
 
 
-Q3 (Rule of Zero — Part 6, if attempted).
+Q3 (Rule of Zero - Part 6, if attempted).
     Why does removing every SMF declaration from your `FriendList` and
     `User` work after Part 6, but would have been a disaster after Part 1?
     Specifically: in Part 2 you deleted the move SMFs on `User`. Do you
@@ -29,3 +62,19 @@ Q3 (Rule of Zero — Part 6, if attempted).
     or the other in 2–4 sentences.
 
     YOUR ANSWER:
+After Part 1, User owned a raw `std::string*` with no destructor, copy constructor, or copy
+assignment, so the compiler-generated SMFs would shallow-copy the pointer and duplicate
+_size/_capacity verbatim - two objects believing they own the same array, causing double-free
+on destruction. Removing SMF declarations then would have been a disaster.
+
+After Part 6, `FriendList` wraps only a `std::vector<std::string>`, which already correctly
+manages its own resources. The compiler-synthesised SMFs for both `FriendList` and `User`
+member-wise delegate to `vector` and `std::string`, both of which are Rule of Five compliant,
+so the generated versions are correct.
+
+The deleted move SMFs on User should also be removed. `vector` supports move, so
+`FriendList`'s implicit move is valid and therefore `User`'s implicit move is valid too.
+Deleting them served a purpose when `FriendList` was move-disabled; keeping them on a type
+whose members are perfectly movable is a false constraint that breaks standard library
+containers and algorithms needlessly. That said, the spec required them deleted for this
+assignment, which surfaced an interesting overload resolution subtlety documented in `user.h`.
