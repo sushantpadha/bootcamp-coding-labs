@@ -106,7 +106,7 @@ template <typename TUser> void test_copy_assignment() {
       std::cout << a << "\n";
       std::cout << b << "\n";
     } else {
-      std::cerr << "User does not have a valid copy constructor." << "\n";
+      std::cerr << "User does not have a valid copy assignment." << "\n";
       std::exit(1);
     }
   } else {

@@ -1,8 +1,8 @@
-<p align="center">
-  <img src="docs/logo.jpeg" alt="A logo of Treebook, a fictional Stanford-based social media startup" style="width: 300px; height: auto;" />
-</p>
-
 # Assignment 4: Treebook
+
+> [!warn] What I did!
+> This is the assignment 5 thing but with basic allocator and container implementation for learning things. A subtle point about move/copy SMF defaulting behaviour, and how it propagates, is also included!
+
 
 ## Overview
 
